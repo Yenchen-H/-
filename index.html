@@ -78,7 +78,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang TC','Micr
    ★ 唯一需要修改的地方 ★
    把 Apps Script 部署後的 Web App URL 貼在這裡
    ================================================ */
-const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbypIfkSrcSnzZReBu3_65YefnUSYZVumE3xD-0vwiy76KjGjdPyz32R8NFfKheBJh7w/exec';
+const WEB_APP_URL = 'https://script.google.com/macros/library/d/1CcXZOxyBpDVd7aW5lG2g-lC7ugNlXsmIV_v7HUYrDYCXgGv2f2_9f87p/3';
 
 /* ================================================
    以下不需要修改
@@ -101,28 +101,47 @@ function syncPts(p,pts){
 }
 
 function calcStats(s,players,pts){
-  if(!s||!s.teams||!s.matches)return{wins:{}};
-  const teamWins={};s.teams.forEach(t=>teamWins[t.id]=0);
+  if(!s||!s.teams||!s.matches)return{wins:{},pf:{},pa:{},teamWins:{},teamPF:{},teamPA:{}};
+  const teamWins={},teamPF={},teamPA={};
+  s.teams.forEach(t=>{teamWins[t.id]=0;teamPF[t.id]=0;teamPA[t.id]=0;});
   s.matches.forEach(m=>{
     const sa=parseInt(m.scoreA),sb=parseInt(m.scoreB);if(isNaN(sa)||isNaN(sb))return;
+    teamPF[m.teamA]=(teamPF[m.teamA]||0)+sa;teamPA[m.teamA]=(teamPA[m.teamA]||0)+sb;
+    teamPF[m.teamB]=(teamPF[m.teamB]||0)+sb;teamPA[m.teamB]=(teamPA[m.teamB]||0)+sa;
     if(sa>sb)teamWins[m.teamA]=(teamWins[m.teamA]||0)+1;
     else if(sb>sa)teamWins[m.teamB]=(teamWins[m.teamB]||0)+1;
   });
-  const wins={};players.forEach(p=>wins[p]=0);
-  s.teams.forEach(t=>{if(t.bye)return;t.players.forEach(p=>{if(wins[p]!==undefined)wins[p]=teamWins[t.id]||0;});});
-  return{wins};
+  const wins={},pf={},pa={};players.forEach(p=>{wins[p]=0;pf[p]=0;pa[p]=0;});
+  s.teams.forEach(t=>{if(t.bye)return;t.players.forEach(p=>{
+    if(wins[p]!==undefined){wins[p]=teamWins[t.id]||0;pf[p]=teamPF[t.id]||0;pa[p]=teamPA[t.id]||0;}
+  });});
+  return{wins,pf,pa,teamWins,teamPF,teamPA};
 }
 
 function sessionScores(s,players,pts){
   if(!s||!s.attendees)return{};
-  const{wins}=calcStats(s,players,pts);
-  const sorted=[...s.attendees].sort((a,b)=>(wins[b]||0)-(wins[a]||0));
-  const score={};let i=0;
-  while(i<sorted.length){
-    let j=i;while(j<sorted.length&&(wins[sorted[j]]||0)===(wins[sorted[i]]||0))j++;
-    const rankPts=[];for(let r=i+1;r<=j;r++)rankPts.push(pts[r]||0);
+  const{wins,pf,pa,teamWins,teamPF,teamPA}=calcStats(s,players,pts);
+  const autoPts=(teamRank)=>teamRank===1?3:teamRank===2?2:1;
+  const activeTeams=(s.teams||[]).filter(t=>!t.bye);
+  activeTeams.sort((a,b)=>{
+    if((teamWins[b.id]||0)!==(teamWins[a.id]||0))return(teamWins[b.id]||0)-(teamWins[a.id]||0);
+    if((teamPF[b.id]||0)!==(teamPF[a.id]||0))return(teamPF[b.id]||0)-(teamPF[a.id]||0);
+    return(teamPA[a.id]||0)-(teamPA[b.id]||0);
+  });
+  const score={};
+  let i=0;
+  while(i<activeTeams.length){
+    let j=i;
+    while(j<activeTeams.length&&
+      (teamWins[activeTeams[j].id]||0)===(teamWins[activeTeams[i].id]||0)&&
+      (teamPF[activeTeams[j].id]||0)===(teamPF[activeTeams[i].id]||0)&&
+      (teamPA[activeTeams[j].id]||0)===(teamPA[activeTeams[i].id]||0))j++;
+    const rankPts=[];for(let r=i+1;r<=j;r++)rankPts.push(autoPts(r));
     const avg=Math.round(rankPts.reduce((s,v)=>s+v,0)/rankPts.length);
-    for(let k=i;k<j;k++)score[sorted[k]]=avg;i=j;
+    for(let k=i;k<j;k++){
+      activeTeams[k].players.forEach(p=>{if(s.attendees.includes(p))score[p]=avg;});
+    }
+    i=j;
   }
   return score;
 }
@@ -193,7 +212,11 @@ function renderHistory(players,pts,sessions){
     if(sorted.length){
       html+=`<table class="h-table"><thead><tr><th>排名</th><th>選手</th><th>勝場</th><th class="r">積分</th></tr></thead><tbody>`;
       let rank=1;sorted.forEach((p,i)=>{
-        if(i>0&&(sc[sorted[i]]||0)!==(sc[sorted[i-1]]||0))rank=i+1;
+        if(i>0&&(sc[sorted[i]]||0)!==(sc[sorted[i-1]]||0)){
+          const prevTeam=(s.teams||[]).find(tt=>tt.players.includes(sorted[i-1])&&!tt.bye);
+          const curTeam=(s.teams||[]).find(tt=>tt.players.includes(sorted[i])&&!tt.bye);
+          if(prevTeam&&curTeam&&prevTeam.id!==curTeam.id)rank++;
+        }
         html+=`<tr><td>${rank}</td><td>${p}</td><td>${wins[p]||0}</td><td class="r"><strong>${sc[p]||0}</strong></td></tr>`;
       });
       html+=`</tbody></table>`;
