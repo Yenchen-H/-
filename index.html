@@ -58,6 +58,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang TC','Micr
 
   <div class="tab-nav">
     <button class="on" onclick="showTab('rank')">排行榜</button>
+    <button onclick="showTab('upcoming')">本週賽程</button>
     <button onclick="showTab('history')">歷史場次</button>
   </div>
 
@@ -67,6 +68,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang TC','Micr
       <div class="metrics" id="metricCards"></div>
       <div class="rank-list" id="rankList"></div>
     </div>
+  </div>
+  <div id="tab-upcoming" style="display:none">
+    <div id="upcomingContent"></div>
   </div>
   <div id="tab-history" style="display:none">
     <div id="histContent"></div>
@@ -227,8 +231,65 @@ function renderHistory(players,pts,sessions){
 }
 
 function showTab(t){
-  ['rank','history'].forEach(id=>{document.getElementById('tab-'+id).style.display=id===t?'':'none';});
-  document.querySelectorAll('.tab-nav button').forEach((b,i)=>{b.classList.toggle('on',['rank','history'][i]===t);});
+  ['rank','upcoming','history'].forEach(id=>{document.getElementById('tab-'+id).style.display=id===t?'':'none';});
+  document.querySelectorAll('.tab-nav button').forEach((b,i)=>{b.classList.toggle('on',['rank','upcoming','history'][i]===t);});
+  if(t==='upcoming')renderUpcoming();
+}
+
+function renderUpcoming(){
+  const el=document.getElementById('upcomingContent');
+  // 找出已建立對賽表但所有比分都未輸入的場次
+  const upcoming=gSessions.filter(s=>{
+    if(!s.matches||!s.matches.length)return false;
+    const hasAnyScore=s.matches.some(m=>m.scoreA!==''||m.scoreB!=='');
+    return !hasAnyScore;
+  });
+  if(!upcoming.length){
+    el.innerHTML='<div class="empty">目前沒有待進行的賽程</div>';return;
+  }
+  let html='';
+  upcoming.forEach(s=>{
+    const activeTeams=(s.teams||[]).filter(t=>!t.bye);
+    const byeTeams=(s.teams||[]).filter(t=>t.bye);
+    html+=`<div class="session-card">
+      <div class="session-header">
+        <span class="session-title">${s.name||'未命名'}</span>
+        <span class="session-meta">${fmtDate(s.date)}・${(s.attendees||[]).length}人・${s.matches.length}場</span>
+      </div>
+      <div style="margin-bottom:10px">
+        <div style="font-size:12px;color:#888;margin-bottom:6px">隊伍組合</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">`;
+    activeTeams.forEach((t,i)=>{
+      html+=`<div style="display:inline-flex;align-items:center;gap:5px;font-size:13px;padding:4px 10px;border-radius:20px;border:1px solid #e0dfd8;background:#f9f9f7">
+        <span style="width:8px;height:8px;border-radius:50%;background:${t.color};display:inline-block;flex-shrink:0"></span>
+        ${t.players.join(' & ')}
+      </div>`;
+    });
+    if(byeTeams.length){
+      byeTeams.forEach(t=>{
+        html+=`<div style="font-size:12px;padding:4px 10px;border-radius:20px;border:1px solid #FAC775;background:#FAEEDA;color:#633806">輪空：${t.players[0]}</div>`;
+      });
+    }
+    html+=`</div></div>
+      <div style="font-size:12px;color:#888;margin-bottom:6px">對賽表（${s.matches.length} 場循環賽）</div>
+      <div style="display:flex;flex-direction:column;gap:6px">`;
+    s.matches.forEach((m,mi)=>{
+      const tA=s.teams[m.teamA],tB=s.teams[m.teamB];
+      const nameA=tA.players.join(' & '),nameB=tB.players.join(' & ');
+      html+=`<div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:#f9f9f7;border:1px solid #e0dfd8;border-radius:8px;font-size:13px">
+        <span style="font-size:11px;color:#aaa;min-width:36px">第${mi+1}場</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;flex:1;font-weight:500">
+          <span style="width:8px;height:8px;border-radius:50%;background:${tA.color};display:inline-block"></span>${nameA}
+        </span>
+        <span style="color:#aaa;font-size:12px;flex-shrink:0">vs</span>
+        <span style="display:inline-flex;align-items:center;gap:4px;flex:1;font-weight:500;justify-content:flex-end">
+          ${nameB}<span style="width:8px;height:8px;border-radius:50%;background:${tB.color};display:inline-block"></span>
+        </span>
+      </div>`;
+    });
+    html+=`</div></div>`;
+  });
+  el.innerHTML=html;
 }
 
 async function init(){
