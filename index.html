@@ -97,68 +97,43 @@ function initials(n){return n.trim().slice(0,2).toUpperCase();}
 function fmtDate(d){if(!d)return'';const p=d.split('-');return p[0]+'/'+(+p[1])+'/'+(+p[2]);}
 function defaultPts(n){const a=[];for(let i=0;i<n;i++)a.push(Math.max(1,n-i));return a;}
 
-let gPlayers=[], gPts={}, gSessions=[];
+let gPlayers=[], gWinPts=2, gSessions=[];
 
-function syncPts(p,pts){
-  const dp=defaultPts(p.length);
-  p.forEach((_,i)=>{if(pts[i+1]===undefined)pts[i+1]=dp[i];});
-}
 
-function calcStats(s,players,pts){
-  if(!s||!s.teams||!s.matches)return{wins:{},pf:{},pa:{},teamWins:{},teamPF:{},teamPA:{}};
-  const teamWins={},teamPF={},teamPA={};
-  s.teams.forEach(t=>{teamWins[t.id]=0;teamPF[t.id]=0;teamPA[t.id]=0;});
-  s.matches.forEach(m=>{
-    const sa=parseInt(m.scoreA),sb=parseInt(m.scoreB);if(isNaN(sa)||isNaN(sb))return;
-    teamPF[m.teamA]=(teamPF[m.teamA]||0)+sa;teamPA[m.teamA]=(teamPA[m.teamA]||0)+sb;
-    teamPF[m.teamB]=(teamPF[m.teamB]||0)+sb;teamPA[m.teamB]=(teamPA[m.teamB]||0)+sa;
-    if(sa>sb)teamWins[m.teamA]=(teamWins[m.teamA]||0)+1;
-    else if(sb>sa)teamWins[m.teamB]=(teamWins[m.teamB]||0)+1;
-  });
-  const wins={},pf={},pa={};players.forEach(p=>{wins[p]=0;pf[p]=0;pa[p]=0;});
-  s.teams.forEach(t=>{if(t.bye)return;t.players.forEach(p=>{
-    if(wins[p]!==undefined){wins[p]=teamWins[t.id]||0;pf[p]=teamPF[t.id]||0;pa[p]=teamPA[t.id]||0;}
-  });});
-  return{wins,pf,pa,teamWins,teamPF,teamPA};
-}
 
-function sessionScores(s,players,pts){
-  if(!s||!s.attendees)return{};
-  const{wins,pf,pa,teamWins,teamPF,teamPA}=calcStats(s,players,pts);
-  const autoPts=(teamRank)=>teamRank===1?3:teamRank===2?2:1;
-  const activeTeams=(s.teams||[]).filter(t=>!t.bye);
-  activeTeams.sort((a,b)=>{
-    if((teamWins[b.id]||0)!==(teamWins[a.id]||0))return(teamWins[b.id]||0)-(teamWins[a.id]||0);
-    if((teamPF[b.id]||0)!==(teamPF[a.id]||0))return(teamPF[b.id]||0)-(teamPF[a.id]||0);
-    return(teamPA[a.id]||0)-(teamPA[b.id]||0);
-  });
+function calcSessionScore(s, winPts){
   const score={};
-  let i=0;
-  while(i<activeTeams.length){
-    let j=i;
-    while(j<activeTeams.length&&
-      (teamWins[activeTeams[j].id]||0)===(teamWins[activeTeams[i].id]||0)&&
-      (teamPF[activeTeams[j].id]||0)===(teamPF[activeTeams[i].id]||0)&&
-      (teamPA[activeTeams[j].id]||0)===(teamPA[activeTeams[i].id]||0))j++;
-    const rankPts=[];for(let r=i+1;r<=j;r++)rankPts.push(autoPts(r));
-    const avg=Math.round(rankPts.reduce((s,v)=>s+v,0)/rankPts.length);
-    for(let k=i;k<j;k++){
-      activeTeams[k].players.forEach(p=>{if(s.attendees.includes(p))score[p]=avg;});
-    }
-    i=j;
-  }
+  (s.attendees||[]).forEach(p=>score[p]=0);
+  (s.matches||[]).forEach(m=>{
+    const sa=parseInt(m.scoreA),sb=parseInt(m.scoreB);
+    if(isNaN(sa)||isNaN(sb))return;
+    if(sa>sb)(m.teamA||[]).forEach(p=>{if(score[p]!==undefined)score[p]+=winPts;});
+    else if(sb>sa)(m.teamB||[]).forEach(p=>{if(score[p]!==undefined)score[p]+=winPts;});
+  });
   return score;
 }
+function calcSessionWins(s){
+  const wins={};(s.attendees||[]).forEach(p=>wins[p]=0);
+  (s.matches||[]).forEach(m=>{
+    const sa=parseInt(m.scoreA),sb=parseInt(m.scoreB);if(isNaN(sa)||isNaN(sb))return;
+    if(sa>sb)(m.teamA||[]).forEach(p=>{if(wins[p]!==undefined)wins[p]++;});
+    else if(sb>sa)(m.teamB||[]).forEach(p=>{if(wins[p]!==undefined)wins[p]++;});
+  });
+  return wins;
+}
 
-function getTotals(players,pts,sessions){
+
+
+function getTotals(players, winPts, sessions){
   return players.map((p,pi)=>{
-    let total=0,count=0,wins=0;
+    let total=0,sessCount=0,totalWins=0;
     sessions.forEach(s=>{
-      if(!s.attendees||!s.attendees.includes(p))return;
-      const sc=sessionScores(s,players,pts);if(sc[p]===undefined)return;
-      total+=sc[p];count++;wins+=(calcStats(s,players,pts).wins[p]||0);
+      if(!(s.attendees||[]).includes(p))return;
+      const sc=calcSessionScore(s,winPts);
+      const w=calcSessionWins(s);
+      if(sc[p]!==undefined){total+=sc[p];sessCount++;totalWins+=w[p]||0;}
     });
-    return{name:p,total,count,wins,idx:pi};
+    return{name:p,total,sessCount,wins:totalWins,idx:pi};
   }).sort((a,b)=>b.total-a.total||a.name.localeCompare(b.name));
 }
 
@@ -171,11 +146,11 @@ async function fetchData(){
   }catch(e){throw e;}
 }
 
-function renderRank(players,pts,sessions,lastUpdated){
+function renderRank(players,winPts,sessions,lastUpdated){
   document.getElementById('loadingRank').style.display='none';
   document.getElementById('rankContent').style.display='';
   document.getElementById('lastUpdate').textContent='更新：'+(lastUpdated||'未知');
-  const totals=getTotals(players,pts,sessions);
+  const totals=getTotals(players,winPts,sessions);
   const maxScore=Math.max(...totals.map(t=>t.total),1);
   const mc=document.getElementById('metricCards');
   const leader=totals[0];
@@ -201,12 +176,12 @@ function renderRank(players,pts,sessions,lastUpdated){
   });
 }
 
-function renderHistory(players,pts,sessions){
+function renderHistory(players,winPts,sessions){
   const el=document.getElementById('histContent');
   if(!sessions||!sessions.length){el.innerHTML='<div class="empty">尚無歷史紀錄</div>';return;}
   let html='';
   [...sessions].reverse().forEach(s=>{
-    const sc=sessionScores(s,players,pts);const{wins}=calcStats(s,players,pts);
+    const sc=calcSessionScore(s,winPts);const wins=calcSessionWins(s);
     const sorted=(s.attendees||[]).slice().sort((a,b)=>(sc[b]||0)-(sc[a]||0));
     html+=`<div class="session-card">
       <div class="session-header">
@@ -216,11 +191,7 @@ function renderHistory(players,pts,sessions){
     if(sorted.length){
       html+=`<table class="h-table"><thead><tr><th>排名</th><th>選手</th><th>勝場</th><th class="r">積分</th></tr></thead><tbody>`;
       let rank=1;sorted.forEach((p,i)=>{
-        if(i>0&&(sc[sorted[i]]||0)!==(sc[sorted[i-1]]||0)){
-          const prevTeam=(s.teams||[]).find(tt=>tt.players.includes(sorted[i-1])&&!tt.bye);
-          const curTeam=(s.teams||[]).find(tt=>tt.players.includes(sorted[i])&&!tt.bye);
-          if(prevTeam&&curTeam&&prevTeam.id!==curTeam.id)rank++;
-        }
+        if(i>0&&(sc[sorted[i]]||0)!==(sc[sorted[i-1]]||0))rank=i+1;
         html+=`<tr><td>${rank}</td><td>${p}</td><td>${wins[p]||0}</td><td class="r"><strong>${sc[p]||0}</strong></td></tr>`;
       });
       html+=`</tbody></table>`;
@@ -238,54 +209,27 @@ function showTab(t){
 
 function renderUpcoming(){
   const el=document.getElementById('upcomingContent');
-  // 找出已建立對賽表但所有比分都未輸入的場次
   const upcoming=gSessions.filter(s=>{
     if(!s.matches||!s.matches.length)return false;
-    const hasAnyScore=s.matches.some(m=>m.scoreA!==''||m.scoreB!=='');
-    return !hasAnyScore;
+    return !s.matches.some(m=>m.scoreA!==''||m.scoreB!=='');
   });
-  if(!upcoming.length){
-    el.innerHTML='<div class="empty">目前沒有待進行的賽程</div>';return;
-  }
+  if(!upcoming.length){el.innerHTML='<div class="empty">目前沒有待進行的賽程</div>';return;}
   let html='';
   upcoming.forEach(s=>{
-    const activeTeams=(s.teams||[]).filter(t=>!t.bye);
-    const byeTeams=(s.teams||[]).filter(t=>t.bye);
     html+=`<div class="session-card">
       <div class="session-header">
         <span class="session-title">${s.name||'未命名'}</span>
         <span class="session-meta">${fmtDate(s.date)}・${(s.attendees||[]).length}人・${s.matches.length}場</span>
       </div>
-      <div style="margin-bottom:10px">
-        <div style="font-size:12px;color:#888;margin-bottom:6px">隊伍組合</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">`;
-    activeTeams.forEach((t,i)=>{
-      html+=`<div style="display:inline-flex;align-items:center;gap:5px;font-size:13px;padding:4px 10px;border-radius:20px;border:1px solid #e0dfd8;background:#f9f9f7">
-        <span style="width:8px;height:8px;border-radius:50%;background:${t.color};display:inline-block;flex-shrink:0"></span>
-        ${t.players.join(' & ')}
-      </div>`;
-    });
-    if(byeTeams.length){
-      byeTeams.forEach(t=>{
-        html+=`<div style="font-size:12px;padding:4px 10px;border-radius:20px;border:1px solid #FAC775;background:#FAEEDA;color:#633806">輪空：${t.players[0]}</div>`;
-      });
-    }
-    html+=`</div></div>
-      <div style="font-size:12px;color:#888;margin-bottom:6px">對賽表（${s.matches.length} 場循環賽）</div>
       <div style="display:flex;flex-direction:column;gap:6px">`;
     s.matches.forEach((m,mi)=>{
-      const tA=s.teams[m.teamA],tB=s.teams[m.teamB];
-      const nameA=tA.players.join(' & '),nameB=tB.players.join(' & ');
       html+=`<div style="display:flex;align-items:center;gap:8px;padding:9px 12px;background:#f9f9f7;border:1px solid #e0dfd8;border-radius:8px;font-size:13px">
         <span style="font-size:11px;color:#aaa;min-width:36px">第${mi+1}場</span>
-        <span style="display:inline-flex;align-items:center;gap:4px;flex:1;font-weight:500">
-          <span style="width:8px;height:8px;border-radius:50%;background:${tA.color};display:inline-block"></span>${nameA}
-        </span>
+        <span style="flex:1;font-weight:500">${(m.teamA||[]).join(' & ')}</span>
         <span style="color:#aaa;font-size:12px;flex-shrink:0">vs</span>
-        <span style="display:inline-flex;align-items:center;gap:4px;flex:1;font-weight:500;justify-content:flex-end">
-          ${nameB}<span style="width:8px;height:8px;border-radius:50%;background:${tB.color};display:inline-block"></span>
-        </span>
-      </div>`;
+        <span style="flex:1;font-weight:500;text-align:right">${(m.teamB||[]).join(' & ')}</span>
+      </div>
+      ${m.waiting&&m.waiting.length?`<div style="font-size:12px;color:#888;padding:4px 8px">等待：${m.waiting.join('・')}</div>`:''}`;
     });
     html+=`</div></div>`;
   });
@@ -299,10 +243,9 @@ async function init(){
   }
   try{
     const data=await fetchData();
-    gPlayers=data.players||[];gPts=data.pts||{};gSessions=data.sessions||[];
-    syncPts(gPlayers,gPts);
-    renderRank(gPlayers,gPts,gSessions,data.lastUpdated);
-    renderHistory(gPlayers,gPts,gSessions);
+    gPlayers=data.players||[];gWinPts=data.winPts||2;gSessions=data.sessions||[];
+    renderRank(gPlayers,gWinPts,gSessions,data.lastUpdated);
+    renderHistory(gPlayers,gWinPts,gSessions);
   }catch(e){
     document.getElementById('loadingRank').innerHTML=`<div class="error-box">讀取失敗：${e.message}<br><br>請確認 Web App URL 是否正確。</div>`;
   }
